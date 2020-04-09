@@ -15,6 +15,8 @@ class Gcs extends DataObject
 
     private $client;
 
+    private $myBucket;
+
     private $helper;
 
     /**
@@ -60,12 +62,20 @@ class Gcs extends DataObject
         $this->storageHelper = $storageHelper;
 		$this->storageFile = $storageFile;
         $this->logger = $logger;
+
 		$this->helper->getAccessKey();
 		$json_key = $this->helper->getAccessKey();
         $key_array = json_decode( $json_key,true );
         $project = $key_array['project_id'];
         //$this->client = new StorageClient([
         //$gcloud = new \Google\Cloud\ServiceBuilder(array('projectId'=> $project,'keyFile'=> $json_key));
+
+        $this->connection = new \Google\Cloud\ServiceBuilder([
+			'projectId'	=> $project,
+			'keyFile'	=> $key_array
+		]);
+
+        $this->myBucket = $this->connection->storage()->bucket($this->helper->getBucket());
         
         $this->client = new \cAc\GcsWrapper\GoogleCloudStorage(
 				$project,
@@ -101,44 +111,30 @@ class Gcs extends DataObject
      * @return $this
      */
     public function loadByFilename($filename) {
-    
-//        	Need to set a download location; file can only be downloaded, then contents, then should be unlinked.
-// 			Perhaps __DIR__ ? 
-// 			Right now, we're going to error out every time
-        //$location = ?????;
         $fail = false;
         try {
-        	$object_is = $this->client->object_exists( $filename );
-        	if( $object_is ) {
-        	
-				$object = $this->client->object_download( $location );
-            
-            }
-            else {
-            
+        	$object_is = $this->client->object_exists($filename);
+        	if(!$object_is) {
                 $fail = true;
-                
             }
-            $contents = file_get_contents( $location );
-            if ($object['Body']) {
+            $myBucketName = $this->myBucket->name();
+            $contents = file_get_contents('gs://'.$myBucketName.'/'.$filename);
+            if ($contents) {
                 $this->setData('id', $filename);
                 $this->setData('filename', $filename);
                 $this->setData('content', (string) $contents);
-                //unlink( $filename );
             } else {
                 $fail = true;
             }
         }
         catch (\Exception $e) {
-        
             $fail = true;
-        
+
+            $this->logger->critical($e->getMessage());
         }
 
         if ($fail) {
-        
             $this->unsetData();
-       
        }
         return $this;
     }
@@ -260,17 +256,22 @@ class Gcs extends DataObject
     {
         $file = $this->mediaHelper->collectFileInfo($this->getMediaBaseDirectory(), $filename);
 
-//         try {
-//             $this->client->putObject([
-//                 'ACL' => 'public-read',
-//                 'Body' => $file['content'],
-//                 'Bucket' => $this->getBucket(),
-//                 'ContentType' => \GuzzleHttp\Psr7\mimetype_from_filename($file['filename']),
-//                 'Key' => $filename
-//             ]);
-//         } catch (\Exception $e) {
-//         }
+        $json_key = $this->helper->getAccessKey();
+        $key_array = json_decode( $json_key,true );
+        $project = $key_array['project_id'];
 
+        try {
+            $mediaPath = $file['directory'].'/'.$file['filename'];
+            $this->client->bucket_upload_object(
+                $mediaPath,
+                $this->storageHelper->getMediaBaseDir(),
+                $file['filename'],
+                false,
+                "publicRead"
+            );
+        } catch (\Exception $e) {
+            $this->logger->critical($e->getMessage());
+        }
         return $this;
     }
 
